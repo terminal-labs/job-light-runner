@@ -9,33 +9,37 @@ import os
 import zipfile
 import base64
 import uuid
+from pathlib import Path
 
-from cli_passthrough import cli_passthrough
-
+import requests
 import click
 from flask import Flask, jsonify, request
-import requests
 
-app = Flask(__name__)
+from cli_passthrough import cli_passthrough
 
 VERSION = "0.1"
 version = "0.2"
 api_spec_version = "0.1"
 status = 'good'
 
-test = {
-        'status': status,
-        }
+host = "http://127.0.0.1"
+port = "5555"
 
-info = {
-        'status': status,
-        'version': version,
-        'api-spec-version': api_spec_version,
-        }
+client_up = '.tmp/client/up/'
+client_down = '.tmp/client/down/'
+server_up = '.tmp/server/up/'
+server_down = '.tmp/server/down/'
+server_jobs = '.tmp/server/jobs/'
 
-@app.route('/api/v1.0/post/echo', methods=['POST'])
-def post():
-    return jsonify(request.json)
+PROJECT_NAME = "jobrunner"
+context_settings = {"help_option_names": ["-h", "--help"]}
+test = {'status': status,}
+info = {'status': status,'version': version,'api-spec-version': api_spec_version,}
+
+def create_dirs(dirs):
+    for dir in dirs:
+        if not os.path.exists(dir):
+            os.mkdir(dir)
 
 def remove(path):
     if os.path.exists(path):
@@ -44,23 +48,37 @@ def remove(path):
         if os.path.isdir(path):
             shutil.rmtree(path)
 
-version = "0.2"
-api_spec_version = "0.1"
+def read_tmp_base64file(filepath):
+    with open(filepath, "rb") as image_file:
+        encoded_data = bytes(image_file.read())
+        return encoded_data
 
-host = "http://127.0.0.1"
-port = "5555"
+def write_tmp_base64file(filepath, data):
+    with open(filepath, 'wb') as f:
+        if isinstance(data, str):
+            f.write(bytes(data, encoding='utf8'))
+        elif isinstance(data, bytes):
+            f.write(data)
 
-def call_server():
-    r = requests.post(host + ':' + port + '/api/v1.0/post/echo', json = {"username":"xyz","password":"xyz"})
-    print(r.text)
+def extractzip(tmp_zipfilename, outputdir):
+    with zipfile.ZipFile(tmp_zipfilename, 'r') as zip_ref:
+        zip_ref.extractall(outputdir)
 
+def creatzip(tmp_zipfilename, inputdir):
+    with zipfile.ZipFile(tmp_zipfilename, "w", zipfile.ZIP_DEFLATED) as zipf:
+        zipdir(inputdir, zipf)
 
-def test():
-    app.run(debug=True, port=5555)
+def readzip(tmp_zipfilename):
+    with open(tmp_zipfilename, "rb") as image_file:
+        data = image_file.read()
+        if isinstance(data, str):
+            return bytes(image_file.read())
+        elif isinstance(data, bytes):
+            return data
 
-def cli():
-    test()
-    call_server()
+def writefile(tmp_zipfilename, bytes_data):
+    with open(tmp_zipfilename, 'wb') as f:
+        f.write(bytes_data)
 
 def progressbar(it, prefix="", size=60, file=sys.stdout):
     count = len(it)
@@ -75,10 +93,100 @@ def progressbar(it, prefix="", size=60, file=sys.stdout):
     file.write("\n")
     file.flush()
 
-PROJECT_NAME = "jobrunner"
+def sanitise_json(message):
+    data = json.loads(message)
+    assert isinstance(data["payload"], str)
+    assert isinstance(data["uuid_name"], str)
+    assert isinstance(data["jobid"], int)
+    assert isinstance(data["metadata"], dict)
+    return message
 
-context_settings = {"help_option_names": ["-h", "--help"]}
+def to_message(bytes_payload, uuid_name, jobid, metadata):
+    assert isinstance(bytes_payload, bytes)
+    message = {
+        "payload": bytes_payload.decode("utf-8"),
+        "uuid_name": uuid_name,
+        "jobid": jobid,
+        "metadata": metadata
+    }
+    data = json.dumps(message)
+    data = sanitise_json(data)
+    return data
 
+def from_message(message):
+    payload_obj = json.loads(message)
+    payload_obj["payload"] == bytes(payload_obj["payload"], encoding='utf8')
+    return payload_obj
+
+def zipdir(path, ziph):
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            ziph.write(os.path.join(root, file),
+            os.path.relpath(os.path.join(root, file),
+            os.path.join(path, '..')))
+
+def send_zip_local(inputdir, uuid_name, jobid):
+    create_dirs([
+        ".tmp/",
+        ".tmp/client",
+        client_up,
+        client_down,
+        ]
+    )
+
+    tmp_zipfilename = client_up + uuid_name +  ".zip"
+    tmp_base64filename = client_up + uuid_name +  ".base64"
+
+    creatzip(tmp_zipfilename, inputdir)
+    bytes_data = readzip(tmp_zipfilename)
+    encoded_data = base64.b64encode(bytes_data)
+    assert isinstance(bytes_data, bytes)
+    assert isinstance(encoded_data, bytes)
+    write_tmp_base64file(tmp_base64filename, encoded_data)
+    bytes_data = read_tmp_base64file(tmp_base64filename)
+    return to_message(bytes_data, uuid_name, jobid, metadata={"pattern": "full"})
+
+def get_zip_local(message, outputdir, uuid_name, jobid):
+    remove(outputdir)
+
+    tmp_zipfilename = client_down + uuid_name +  ".zip"
+    tmp_base64filename = client_down + uuid_name +  ".base64"
+
+    payload_obj = from_message(message)
+    write_tmp_base64file(tmp_base64filename, payload_obj["payload"])
+    encoded_data = read_tmp_base64file(tmp_base64filename)
+    bytes_data = base64.b64decode(encoded_data)
+    assert isinstance(encoded_data, bytes)
+    assert isinstance(bytes_data, bytes)
+    writefile(tmp_zipfilename, bytes_data)
+    extractzip(tmp_zipfilename, outputdir)
+
+def process_zip_local():
+    create_dirs([
+        ".tmp/",
+        ".tmp/server",
+        server_up,
+        server_down,
+        server_jobs,
+        ]
+    )
+
+def call_server():
+    r = requests.post(host + ':' + port + '/api/v1.0/post/echo', json = {"username":"xyz","password":"xyz"})
+    print(r.text)
+
+def test():
+    app.run(debug=True, port=5555)
+
+def cli():
+    test()
+    call_server()
+
+app = Flask(__name__)
+
+@app.route('/api/v1.0/post/echo', methods=['POST'])
+def post():
+    return jsonify(request.json)
 
 @click.group(context_settings=context_settings)
 @click.version_option(prog_name=PROJECT_NAME.capitalize(), version=VERSION)
@@ -100,65 +208,15 @@ def serve_cmd():
 
 @client_group.command("call")
 def call_cmd():
-    for i in progressbar(range(1), "Computing: ", 40):
-        time.sleep(0.1)
+    # for i in progressbar(range(1), "Computing: ", 40):
+    #     time.sleep(0.1)
 
     uuid_name = uuid.uuid4().hex
-
-    def zipdir(path, ziph):
-        # ziph is zipfile handle
-        for root, dirs, files in os.walk(path):
-            for file in files:
-                ziph.write(os.path.join(root, file),
-                           os.path.relpath(os.path.join(root, file),
-                                           os.path.join(path, '..')))
-    dirName = ".tmp/"
-    if not os.path.exists(".tmp/"):
-        os.mkdir(dirName)
-    dirName = ".tmp/up"
-    if not os.path.exists(".tmp/up"):
-        os.mkdir(dirName)
-    dirName = ".tmp/down"
-    if not os.path.exists(".tmp/down"):
-        os.mkdir(dirName)
-    with zipfile.ZipFile(".tmp/up/" + uuid_name +  ".zip", "w", zipfile.ZIP_DEFLATED) as zipf:
-        zipdir('input/raycaster', zipf)
-
-    with open(".tmp/up/" + uuid_name +  ".zip", "rb") as image_file:
-        bytes_data = bytes(image_file.read())
-        encoded_data = base64.b64encode(bytes_data)
-
-    with open(".tmp/up/" + uuid_name +  ".base64", 'wb') as f:
-        f.write(encoded_data)
-
-    with open(".tmp/up/" + uuid_name +  ".base64", "rb") as image_file:
-        bytes_data = bytes(image_file.read())
-
-    def to_message(bytes_payload, uuid_name, jobid, metadata):
-        message = {
-            "payload": bytes_payload.decode("utf-8"),
-            "uuid_name": uuid_name,
-            "jobid": jobid,
-            "metadata": metadata
-        }
-        return json.dumps(message)
-
-    def from_message(message):
-        payload_obj = json.loads(message)
-        payload_obj["payload"] = bytes(base64.b64decode(payload_obj["payload"]))
-        return payload_obj
-
-
-    message = to_message(bytes_data, uuid_name, jobid=5, metadata={"pattern": "full"})
-    payload_obj = from_message(message)
-
-    with open('.tmp/down/' + payload_obj["uuid_name"] + '.zip', 'wb') as f:
-        f.write(payload_obj["payload"])
-
-    remove("output/cythone/raycaster")
-    with zipfile.ZipFile('.tmp/down/' + payload_obj["uuid_name"] + '.zip', 'r') as zip_ref:
-        zip_ref.extractall('output/cythone')
+    jobid = 8
+    message = send_zip_local("input/raycaster", uuid_name, jobid)
+    print(message)
+    process_zip_local()
+    get_zip_local(message, "output/cythone", uuid_name, jobid)
 
 cli.add_command(client_group)
 cli.add_command(server_group)
-cli
