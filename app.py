@@ -30,6 +30,19 @@ client_down = '.tmp/client/down/'
 server_up = '.tmp/server/up/'
 server_down = '.tmp/server/down/'
 server_jobs = '.tmp/server/jobs/'
+server_workspace = '.tmp/server/workspace/'
+
+tmp_dirs = [
+    ".tmp/",
+    ".tmp/client",
+    ".tmp/server",
+    client_up,
+    client_down,
+    server_up,
+    server_down,
+    server_jobs,
+    server_workspace
+    ]
 
 PROJECT_NAME = "jobrunner"
 context_settings = {"help_option_names": ["-h", "--help"]}
@@ -125,18 +138,8 @@ def zipdir(path, ziph):
             os.path.relpath(os.path.join(root, file),
             os.path.join(path, '..')))
 
-def send_zip_local(inputdir, uuid_name, jobid):
-    create_dirs([
-        ".tmp/",
-        ".tmp/client",
-        client_up,
-        client_down,
-        ]
-    )
 
-    tmp_zipfilename = client_up + uuid_name +  ".zip"
-    tmp_base64filename = client_up + uuid_name +  ".base64"
-
+def __prep_zip(inputdir, tmp_zipfilename, tmp_base64filename, uuid_name, jobid, metadata):
     creatzip(tmp_zipfilename, inputdir)
     bytes_data = readzip(tmp_zipfilename)
     encoded_data = base64.b64encode(bytes_data)
@@ -144,14 +147,10 @@ def send_zip_local(inputdir, uuid_name, jobid):
     assert isinstance(encoded_data, bytes)
     write_tmp_base64file(tmp_base64filename, encoded_data)
     bytes_data = read_tmp_base64file(tmp_base64filename)
-    return to_message(bytes_data, uuid_name, jobid, metadata={"pattern": "full"})
+    return to_message(bytes_data, uuid_name, jobid, metadata)
 
-def get_zip_local(message, outputdir, uuid_name, jobid):
-    remove(outputdir)
 
-    tmp_zipfilename = client_down + uuid_name +  ".zip"
-    tmp_base64filename = client_down + uuid_name +  ".base64"
-
+def __get_zip(message, tmp_zipfilename, tmp_base64filename, uuid_name, jobid):
     payload_obj = from_message(message)
     write_tmp_base64file(tmp_base64filename, payload_obj["payload"])
     encoded_data = read_tmp_base64file(tmp_base64filename)
@@ -159,32 +158,50 @@ def get_zip_local(message, outputdir, uuid_name, jobid):
     assert isinstance(encoded_data, bytes)
     assert isinstance(bytes_data, bytes)
     writefile(tmp_zipfilename, bytes_data)
+
+
+def prep_zip_localclient(inputdir, uuid_name, jobid):
+    tmp_zipfilename = client_up + uuid_name +  ".zip"
+    tmp_base64filename = client_up + uuid_name +  ".base64"
+    return __prep_zip(inputdir, tmp_zipfilename, tmp_base64filename, uuid_name, jobid, metadata={"pattern": "full"})
+
+
+def get_message_localclient(message, uuid_name, jobid):
+    tmp_zipfilename = client_down + uuid_name +  ".zip"
+    tmp_base64filename = client_down + uuid_name +  ".base64"
+    __get_zip(message, tmp_zipfilename, tmp_base64filename, uuid_name, jobid)
+
+
+def process_zip_localclient(outputdir, uuid_name, jobid):
+    remove(outputdir)
+    tmp_zipfilename = server_down + uuid_name +  ".zip"
     extractzip(tmp_zipfilename, outputdir)
 
-def process_zip_local():
-    create_dirs([
-        ".tmp/",
-        ".tmp/server",
-        server_up,
-        server_down,
-        server_jobs,
-        ]
-    )
 
-def call_server():
-    r = requests.post(host + ':' + port + '/api/v1.0/post/echo', json = {"username":"xyz","password":"xyz"})
-    print(r.text)
+def prep_zip_localserve(inputdir, uuid_name, jobid):
+    tmp_zipfilename = server_up + uuid_name +  ".zip"
+    tmp_base64filename = server_up + uuid_name +  ".base64"
+    return __prep_zip(inputdir, tmp_zipfilename, tmp_base64filename, uuid_name, jobid, metadata={"pattern": "full"})
 
-def test():
-    app.run(debug=True, port=5555)
 
-def cli():
-    test()
-    call_server()
+def get_message_localserve(message):
+    payload_obj = from_message(message)
+    uuid_name = payload_obj["uuid_name"]
+    jobid = payload_obj["jobid"]
+    tmp_zipfilename = server_down + uuid_name +  ".zip"
+    tmp_base64filename = server_down + uuid_name +  ".base64"
+    __get_zip(message, tmp_zipfilename, tmp_base64filename, uuid_name, jobid)
+
+
+def process_zip_localserve(outputdir, uuid_name, jobid):
+    remove(outputdir)
+    tmp_zipfilename = server_down + uuid_name +  ".zip"
+    extractzip(tmp_zipfilename, outputdir)
+
 
 app = Flask(__name__)
 
-@app.route('/api/v1.0/post/echo', methods=['POST'])
+@app.route('/api/payload', methods=['POST'])
 def post():
     return jsonify(request.json)
 
@@ -206,17 +223,26 @@ def server_group():
 def serve_cmd():
     app.run(debug=True, port=5555)
 
-@client_group.command("call")
-def call_cmd():
+@client_group.command("loopback")
+def loopback_cmd():
+    r = requests.post(host + ':' + port + '/api/payload', json = {"username":"xyz","password":"xyz"})
+    print(r.text)
+
+@client_group.command("local")
+def local_cmd():
+    create_dirs(tmp_dirs)
     # for i in progressbar(range(1), "Computing: ", 40):
     #     time.sleep(0.1)
 
     uuid_name = uuid.uuid4().hex
     jobid = 8
-    message = send_zip_local("input/raycaster", uuid_name, jobid)
-    print(message)
-    process_zip_local()
-    get_zip_local(message, "output/cythone", uuid_name, jobid)
+
+    message = prep_zip_localclient("input/raycaster", uuid_name, jobid)
+    get_message_localserve(message)
+    process_zip_localserve(".tmp/server/workspace", uuid_name, jobid)
+    message = prep_zip_localserve(".tmp/server/workspace", uuid_name, jobid)
+    get_message_localclient(message, uuid_name, jobid)
+    process_zip_localclient("output/cythone", uuid_name, jobid)
 
 cli.add_command(client_group)
 cli.add_command(server_group)
