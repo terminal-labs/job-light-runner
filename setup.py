@@ -1,17 +1,17 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="jobrunner",
     version='0.1',
-    py_modules=['app'],
     install_requires=[
         'requests',
         'flask',
         'Click',
         'cli-passthrough',
     ],
+    packages=find_packages(),
     entry_points='''
         [console_scripts]
-        jobrunner=app:cli
+        jobrunner=jobrunner.core:cli
     ''',
 )
