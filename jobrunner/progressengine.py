@@ -1,19 +1,38 @@
 import os
 import sys
+import json
 import time
 
 from jobrunner.config import tmp_dirs
 
-def pbar(uuid_name, checkpointlines):
+def get_track_data(uuid_name):
+    with open('.tmp/runners/runs/' + uuid_name + "/track.json", "rb") as f:
+        data = json.loads(f.read())
+        return data
+
+def write_track_data(filepath, status):
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(status, f, ensure_ascii=False, indent=4)
+
+def track_run(uuid_name, checkpointlines, pbar=False):
+    def _update_track_file(runs, count):
+        status = {"runs":runs, "count":count}
+        write_track_data('.tmp/runners/runs/' + uuid_name + "/track.json", status)
     runs = len(checkpointlines)
     count = 0
-    while count <= runs - 1:
+    status = {"runs":runs, "count":count}
+    if pbar:
         updt(runs, count)
+    _update_track_file(runs, count)
+    while count <= runs - 1:
         with open('.tmp/runners/runs/' + uuid_name + "/process.out") as f:
-            count = measure_progress(f, checkpointlines)
+            mp = measure_progress(f, checkpointlines)
+            if mp > count:
+                count = mp
+                if pbar:
+                    updt(runs, count)
+                _update_track_file(runs, count)
         time.sleep(1)
-    updt(runs, count)
-
 
 def measure_progress(f, checkpointlines):
     lines = f.readlines()
