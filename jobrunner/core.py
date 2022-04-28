@@ -222,6 +222,19 @@ def echo(name, uuid_name, jobid, target):
     get_message_localclient(message, uuid_name, jobid)
     process_zip_localclient("output", name, uuid_name, jobid)
 
+def send_to_runner(name, uuid_name, jobid):
+    create_dirs(tmp_dirs)
+    message = prep_zip_localclient(name, name, uuid_name, jobid)
+    r = requests.post(host + ':' + port + '/api/preppackage', json = message)
+    message = r.content
+
+def call_runner_track(uuid_name):
+    r = requests.get('http://127.0.0.1:8080/track/' + uuid_name)
+    message = r.json()
+    uuid_name = message["uuid_name"]
+    return message
+
+
 app = Flask(__name__)
 
 @app.route('/api/loopback', methods=['POST'])
