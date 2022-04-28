@@ -24,7 +24,7 @@ def track_run(uuid_name, checkpointlines, pbar=False):
     if pbar:
         updt(runs, count)
     _update_track_file(runs, count)
-    while count <= runs - 1:
+    while count < runs:
         with open('.tmp/runners/runs/' + uuid_name + "/process.out") as f:
             mp = measure_progress(f, checkpointlines)
             if mp > count:
@@ -37,6 +37,7 @@ def track_run(uuid_name, checkpointlines, pbar=False):
 def measure_progress(f, checkpointlines):
     lines = f.readlines()
     lines = [s.strip() for s in lines]
+    lines = [s for s in lines if s]
     count = 0
     for line in checkpointlines:
         if line in lines:
@@ -47,6 +48,8 @@ def get_checkpointlines(filepath):
     with open(filepath) as f:
         checkpointlines = f.readlines()
         checkpointlines = [s.strip() for s in checkpointlines]
+        checkpointlines = [s for s in checkpointlines if s]
+
     return checkpointlines
 
 def register_run(uuid_name):
